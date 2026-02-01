@@ -122,6 +122,40 @@ PictuRAS is built using a microservices architecture with the following componen
 3. Start a new project and upload your first image
 4. Explore the various editing tools and AI features
 
+## 🎯 Usage
+
+### For Users
+
+1. **Create Account**: Register for a free account or use anonymous mode
+2. **Start Project**: Create a new project and upload images
+3. **Edit Images**: Use the intuitive toolbar to apply various effects
+4. **AI Features**: Leverage AI tools for smart enhancements
+5. **Export Results**: Download processed images individually or as a batch
+
+### For Developers
+
+- The system uses a message queue architecture for scalable processing
+- Each tool is containerized and can be scaled independently
+- Real-time updates are provided via WebSocket connections
+- All services are stateless and can be deployed across multiple instances
+
+## 🔧 Configuration
+
+### Environment Variables
+
+- `JWT_SECRET_KEY`: Secret key for JWT token generation
+- `FREE_DAILY_OP`: Daily operation limit for free users (default: 5)
+- `MINIO_ROOT_USER`: MinIO storage username
+- `MINIO_ROOT_PASSWORD`: MinIO storage password
+- `RABBITMQ_USER`: Message queue username
+- `RABBITMQ_PASS`: Message queue password
+
+### Scaling
+
+- Increase the number of tool instances in docker-compose.yaml
+- Adjust resource limits based on your hardware capabilities
+- Monitor processing queues through RabbitMQ management interface
+
 ## 📁 Project Structure
 
 ```
