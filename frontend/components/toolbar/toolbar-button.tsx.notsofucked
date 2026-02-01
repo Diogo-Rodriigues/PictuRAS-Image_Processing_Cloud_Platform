@@ -1,0 +1,446 @@
+import { LoaderCircle, Sparkle, type LucideIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useRouter } from "next/navigation";
+import { useSession } from "@/providers/session-provider";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from "../ui/dropdown-menu";
+import { useEffect, useState } from "react";
+import {
+  useCurrentImage,
+  usePreview,
+  useProjectInfo,
+} from "@/providers/project-provider";
+import { useProjectPending } from "@/providers/project-provider";
+import {
+  useAddProjectTool,
+  useDeleteProjectTool,
+  usePreviewProjectResult,
+  useUpdateProjectTool,
+} from "@/lib/mutations/projects";
+import { ProjectTool, ProjectToolResponse } from "@/lib/projects";
+import { toast } from "@/hooks/use-toast";
+import { useGetSocket } from "@/lib/queries/projects";
+import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip";
+import { Input } from "../ui/input";
+import { Label } from "../ui/label";
+
+interface ToolbarButtonProps {
+  open?: boolean;
+  setOpen?: (open: boolean) => void;
+  icon: LucideIcon;
+  label: string;
+  disabled?: boolean;
+  isDefault?: boolean;
+  isPremium?: boolean;
+  tool: Omit<ProjectTool, "position">;
+  children?: React.ReactNode;
+  noParams?: boolean;
+  onDefault?: () => void;
+}
+
+export function ToolbarButton({
+  open = false,
+  setOpen = () => {},
+  icon: Icon,
+  label,
+  disabled = false,
+  isDefault = false,
+  isPremium = false,
+  tool,
+  children,
+  noParams = false,
+  onDefault = () => {},
+}: ToolbarButtonProps) {
+  const router = useRouter();
+  const session = useSession();
+  const project = useProjectInfo();
+  const preview = usePreview();
+  const variant =
+    project.tools.find((t) => t.procedure === tool.procedure) !== undefined
+      ? "default"
+      : "outline";
+  const socket = useGetSocket(session.token);
+
+  const currentImage = useCurrentImage();
+  const addTool = useAddProjectTool(
+    project.user_id,
+    project._id,
+    session.token,
+    project.shareToken,
+  );
+  const updateTool = useUpdateProjectTool(
+    project.user_id,
+    project._id,
+    session.token,
+    project.shareToken,
+  );
+  const deleteTool = useDeleteProjectTool(
+    project.user_id,
+    project._id,
+    session.token,
+    project.shareToken,
+  );
+  const previewEdits = usePreviewProjectResult();
+
+  const [prevTool, setPrevTool] = useState<ProjectToolResponse | undefined>(
+    undefined,
+  );
+  const [waiting, setWaiting] = useState<boolean>(false);
+  const [timedout, setTimedout] = useState<boolean>(false);
+  const [position, setPosition] = useState<number>(prevTool?.position ?? project.tools.length);
+  const [positionConflict, setPositionConflict] = useState<boolean>(false);
+  const { pendingPositions, setPendingPosition } = useProjectPending();
+
+  // console.log("FUCKING TOOL:", prevTool, positionConflict);
+
+  function handleDeleteTool() {
+    if (prevTool) {
+      deleteTool.mutate(
+        {
+          uid: project.user_id,
+          pid: project._id,
+          toolId: prevTool._id,
+          token: session.token,
+        },
+        {
+          onError: (error) => {
+            toast({
+              title: "Ups! An error occurred.",
+              description: error.message,
+              variant: "destructive",
+            });
+          },
+        },
+      );
+    }
+  }
+
+  function handlePreview() {
+    previewEdits.mutate(
+      {
+        uid: project.user_id,
+        pid: project._id,
+        imageId: currentImage?._id ?? "",
+        token: session.token,
+        requesterId: session.user._id,
+        shareToken: project.shareToken,
+      },
+      {
+        onSuccess: () => {
+          setWaiting(true);
+          preview.setWaiting(tool.procedure);
+          setTimeout(
+            () => setTimedout(true),
+            10000 * (project.tools.length + 1),
+          );
+        },
+        onError: (error) => {
+          toast({
+            title: "Ups! An error occurred.",
+            description: error.message,
+            variant: "destructive",
+          });
+        },
+      },
+    );
+  }
+
+  function handleAddTool(preview?: boolean) {
+    const hasConflict = checkConflict();
+
+    if (prevTool) {
+      const updateObj: Record<string, unknown> = {
+        uid: project.user_id,
+        pid: project._id,
+        toolId: prevTool._id,
+        toolParams: tool.params,
+        token: session.token,
+      };
+
+      const actualTool = project.tools.find(t => t._id === prevTool._id);
+      if (!hasConflict && actualTool && prevTool.position !== actualTool.position) updateObj.tool = {
+        ...tool,
+        position: prevTool.position
+      }
+
+      console.log("FUCKING UPDATE:", !hasConflict, !!actualTool, prevTool.position, actualTool!.position);
+
+      updateTool.mutate(
+        updateObj,
+        {
+          onSuccess: () => {
+            if (preview) handlePreview();
+          },
+          onError: (error) => {
+            toast({
+              title: "Ups! An error occurred.",
+              description: error.message,
+              variant: "destructive",
+            });
+          },
+        },
+      );
+    } else {
+      addTool.mutate(
+        {
+          uid: project.user_id,
+          pid: project._id,
+          tool: {
+            ...tool,
+            position: project.tools.length,
+          },
+          token: session.token,
+        },
+        {
+          onSuccess: () => {
+            if (preview) handlePreview();
+          },
+          onError: (error) => {
+            toast({
+              title: "Ups! An error occurred.",
+              description: error.message,
+              variant: "destructive",
+            });
+          },
+        },
+      );
+    }
+    setOpen(false);
+  }
+
+  function handleClick() {
+    if (isPremium) {
+      if (session.user.type === "anonymous") {
+        router.push("/login");
+        return;
+      }
+      if (noParams) {
+        if (prevTool) handleDeleteTool();
+        else handleAddTool(true);
+      }
+      return;
+    }
+    if (noParams) {
+      if (prevTool) handleDeleteTool();
+      else handleAddTool(true);
+    }
+  }
+
+  function checkConflict(pos?: number) {
+    const curPos = pos ?? position;
+
+    // build entries array from saved tools and pending positions
+    type Entry = { position: number; procedure: string; source: "saved" | "pending"; id?: string };
+    const entries: Entry[] = [];
+    for (const t of project.tools) {
+      entries.push({ position: t.position, procedure: t.procedure, source: "saved", id: t._id });
+    }
+    for (const [proc, p] of Object.entries(pendingPositions || {})) {
+      if (p === undefined) continue;
+      entries.push({ position: p, procedure: proc, source: "pending" });
+    }
+
+    // group entries by position
+    const groups = new Map<number, Entry[]>();
+    for (const e of entries) {
+      const g = groups.get(e.position) ?? [];
+      g.push(e);
+      groups.set(e.position, g);
+    }
+
+    // conflict positions are those with more than one owner
+    const conflictPositions = new Set<number>();
+    for (const [posn, g] of groups) {
+      if (g.length > 1) conflictPositions.add(posn);
+    }
+
+    // current tool is conflicted if any entry for this procedure has a position in conflictPositions
+    const isConflicted = entries.some((e) => e.procedure === tool.procedure && conflictPositions.has(e.position));
+    setPositionConflict(isConflicted);
+    return isConflicted;
+  }
+
+  function handlePosition(pos: number) {
+    if (pos < 0) return;
+
+    setPosition(pos);
+    setPendingPosition(tool.procedure, pos);
+  }
+
+  useEffect(() => {
+    checkConflict();
+  }, [position, positionConflict]);
+
+  useEffect(() => {
+    if (timedout) {
+      if (waiting) {
+        setWaiting(false);
+        preview.setWaiting("");
+        toast({
+          title: "Ups! An error occurred.",
+          description: "The preview took too long to load.",
+          variant: "destructive",
+        });
+      }
+      setTimedout(false);
+    }
+  }, [timedout, waiting, preview]);
+
+  useEffect(() => {
+    let active = true;
+
+    if (active && socket.data) {
+      socket.data.on("preview-ready", () => {
+        if (active) {
+          setWaiting(false);
+          preview.setWaiting("");
+        }
+      });
+    }
+
+    return () => {
+      active = false;
+      if (socket.data) {
+        socket.data.off("preview-ready");
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket.data]);
+
+  useEffect(() => {
+    const prevTool = project.tools.find((t) => t.procedure === tool.procedure);
+    setPrevTool(prevTool);
+    setPosition(prevTool?.position ?? project.tools.length);
+    checkConflict();
+  }, [project.tools, tool.procedure]);
+
+  useEffect(() => {
+    checkConflict();
+  }, [pendingPositions]);
+
+  const TButton = () => (
+    <Tooltip>
+      <Button
+        variant={variant}
+        className={`size-8 relative ${isPremium && variant === "default" && "bg-indigo-500 hover:bg-indigo-400"} ${positionConflict ? "bg-red-900 hover:bg-red-900" : ""}`}
+        disabled={
+          disabled ||
+          (preview.waiting !== tool.procedure && preview.waiting !== "")
+        }
+        onClick={handleClick}
+      >
+        {waiting ? (
+          <LoaderCircle className="animate-spin" />
+        ) : (
+          <>
+            {isPremium ? (
+              <TooltipTrigger asChild>
+                <div
+                  className={
+                    isPremium && variant === "default"
+                      ? "text-white"
+                      : "text-indigo-500"
+                  }
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <Sparkle className="h-3 w-3 absolute -top-1 -right-1" />
+                  <span className="sr-only">{label}</span>
+                </div>
+              </TooltipTrigger>
+            ) : (
+              <>
+                <Icon className="h-3.5 w-3.5" />
+                <span className="sr-only">{label}</span>
+              </>
+            )}
+          </>
+        )}
+      </Button>
+      <TooltipContent className="ml-2 bg-indigo-500" side="right">
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  );
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      {!((isPremium && session.user.type === "anonymous") || noParams) ? (
+        <DropdownMenuTrigger
+          asChild
+          disabled={
+            disabled ||
+            (preview.waiting !== tool.procedure && preview.waiting !== "")
+          }
+        >
+          <div>
+            <TButton />
+          </div>
+        </DropdownMenuTrigger>
+      ) : (
+        <div>
+          <TButton />
+        </div>
+      )}
+      <DropdownMenuContent
+        className="w-[--radix-dropdown-menu-trigger-width] min-w-64 rounded-lg"
+        side="right"
+        align="end"
+        sideOffset={4}
+      >
+        <DropdownMenuLabel className="text-sm p-1">{label}</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <div className="p-1">{children}</div>
+        <DropdownMenuSeparator />
+        <div className="p-1">
+          <div className="space-y-1">
+            <div className="flex w-full justify-between items-center text-sm text-gray-500">
+              <Label htmlFor="position">Position</Label>
+              <div className="flex items-center space-x-2 w-1/2">
+                <Input
+                  id="position"
+                  type="number"
+                  value={position}
+                  onChange={(e) => handlePosition(Number(e.target.value))}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+        <DropdownMenuSeparator />
+        <div className="flex w-full gap-1 items-center">
+          <Button
+            variant={"outline"}
+            className="h-6 text-xs"
+            onClick={() => {
+              handleDeleteTool();
+              onDefault();
+            }}
+            disabled={isDefault}
+          >
+            Default
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => handleAddTool(true)}
+            className="h-6 text-xs"
+            disabled={isDefault}
+          >
+            Preview
+          </Button>
+          <Button
+            onClick={() => handleAddTool()}
+            disabled={isDefault}
+            className={`h-6 text-xs w-full ${positionConflict ? "bg-red-50 text-red-700 hover:bg-red-50" : ""}`}
+          >
+            Save
+          </Button>
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
